@@ -1,15 +1,17 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Upload, 
-  CheckCircle, 
-  AlertCircle, 
-  Loader, 
-  FileSpreadsheet, 
-  ChevronLeft, 
+
+import React, { useState, useEffect, useRef } from "react";
+import {
+  Upload,
+  CheckCircle,
+  AlertCircle,
+  Loader,
+  FileSpreadsheet,
+  ChevronLeft,
   ChevronRight,
-  XCircle
-} from 'lucide-react';
-import './App.css';
+  XCircle,
+} from "lucide-react";
+import * as XLSX from "xlsx";
+import "./App.css";
 
 const AllergenLabelSystem = () => {
   // State management
@@ -17,11 +19,15 @@ const AllergenLabelSystem = () => {
   const [recipes, setRecipes] = useState([]);
   const [currentRecipeIndex, setCurrentRecipeIndex] = useState(0);
   const [processing, setProcessing] = useState(false);
-  const [progress, setProgress] = useState({ current: 0, total: 0, message: '' });
-  const [error, setError] = useState('');
+  const [progress, setProgress] = useState({
+    current: 0,
+    total: 0,
+    message: "",
+  });
+  const [error, setError] = useState("");
   const [validated, setValidated] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
-  
+
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
 
@@ -29,80 +35,82 @@ const AllergenLabelSystem = () => {
   useEffect(() => {
     const connectWebSocket = () => {
       try {
-        wsRef.current = new WebSocket('ws://localhost:3001');
-        
+        wsRef.current = new WebSocket("ws://localhost:3001");
+
         wsRef.current.onopen = () => {
-          console.log('✓ WebSocket connected');
+          console.log("✓ WebSocket connected");
           setWsConnected(true);
-          setError('');
+          setError("");
         };
-        
         wsRef.current.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            
+
             switch (data.type) {
-              case 'PROGRESS':
+              case "PROGRESS":
                 setProgress({
                   current: data.current,
                   total: data.total,
-                  message: data.message
+                  message: data.message || "Processing...",
                 });
                 break;
-                
-              case 'RECIPE_RESULT':
-                setRecipes(prev => {
+
+              case "RECIPE_RESULT":
+                setRecipes((prev) => {
                   const newRecipes = [...prev];
-                  newRecipes[data.index] = data.result;
+                  // Merge to preserve ingredients array
+                  newRecipes[data.index] = {
+                    ...newRecipes[data.index],
+                    ...data.result,
+                  };
                   return newRecipes;
                 });
                 break;
-                
-              case 'COMPLETE':
-                setProgress({ 
-                  current: data.recipes.length, 
-                  total: data.recipes.length, 
-                  message: 'Processing complete!' 
+
+              case "COMPLETE":
+                setProgress({
+                  current: data.recipes.length,
+                  total: data.recipes.length,
+                  message: "Processing complete!",
                 });
                 setProcessing(false);
                 break;
-                
-              case 'ERROR':
+
+              case "ERROR":
                 setError(data.message);
                 setProcessing(false);
                 break;
-                
+
               default:
-                console.warn('Unknown message type:', data.type);
+                console.warn("Unknown message type:", data.type);
             }
           } catch (err) {
-            console.error('Error parsing WebSocket message:', err);
+            console.error("Error parsing WebSocket message:", err);
           }
         };
-        
         wsRef.current.onerror = (error) => {
-          console.error('WebSocket error:', error);
+          console.error("WebSocket error:", error);
           setWsConnected(false);
         };
-        
+
         wsRef.current.onclose = () => {
-          console.log('✗ WebSocket disconnected');
+          console.log("✗ WebSocket disconnected");
           setWsConnected(false);
-          
+
           // Auto-reconnect after 3 seconds
           reconnectTimeoutRef.current = setTimeout(() => {
-            console.log('Attempting to reconnect...');
+            console.log("Attempting to reconnect...");
             connectWebSocket();
           }, 3000);
         };
       } catch (err) {
-        console.error('Failed to create WebSocket:', err);
+        console.error("Failed to create WebSocket:", err);
         setWsConnected(false);
       }
     };
-    
+
     connectWebSocket();
-    
+
     // Cleanup on unmount
     return () => {
       if (reconnectTimeoutRef.current) {
@@ -120,25 +128,27 @@ const AllergenLabelSystem = () => {
   const parseExcelFile = async (file) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      
+
       reader.onload = async (e) => {
         try {
           const data = new Uint8Array(e.target.result);
-          const workbook = window.XLSX.read(data, { type: 'array' });
+          const workbook = XLSX.read(data, { type: "array" });
           const sheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[sheetName];
-          const jsonData = window.XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-          
+          const jsonData = window.XLSX.utils.sheet_to_json(worksheet, {
+            header: 1,
+          });
+
           const parsedRecipes = [];
           let currentRecipe = null;
-          
+
           jsonData.forEach((row, index) => {
             if (index === 0) return; // Skip header row
-            
+
             const recipeName = row[0];
             const ingredient = row[1];
-            
-            if (recipeName && recipeName.toString().trim() !== '') {
+
+            if (recipeName && recipeName.toString().trim() !== "") {
               // New recipe found
               if (currentRecipe) {
                 parsedRecipes.push(currentRecipe);
@@ -149,21 +159,21 @@ const AllergenLabelSystem = () => {
                 allergens: [],
                 flagged_ingredients: {},
                 unrecognized_ingredients: [],
-                message: 'Pending validation'
+                message: "Pending validation",
               };
             } else if (ingredient && currentRecipe) {
               // Additional ingredient for current recipe
               currentRecipe.ingredients.push(ingredient.toString().trim());
             }
           });
-          
+
           // Add last recipe
           if (currentRecipe) {
             parsedRecipes.push(currentRecipe);
           }
-          
+
           if (parsedRecipes.length === 0) {
-            reject(new Error('No recipes found in file'));
+            reject(new Error("No recipes found in file"));
           } else {
             resolve(parsedRecipes);
           }
@@ -171,11 +181,11 @@ const AllergenLabelSystem = () => {
           reject(new Error(`Failed to parse Excel: ${err.message}`));
         }
       };
-      
+
       reader.onerror = () => {
-        reject(new Error('Failed to read file'));
+        reject(new Error("Failed to read file"));
       };
-      
+
       reader.readAsArrayBuffer(file);
     });
   };
@@ -186,21 +196,23 @@ const AllergenLabelSystem = () => {
   const handleFileUpload = async (e) => {
     const uploadedFile = e.target.files[0];
     if (!uploadedFile) return;
-    
+
     // Validate file type
-    const validExtensions = ['.xlsx', '.xls'];
-    const fileExtension = uploadedFile.name.substring(uploadedFile.name.lastIndexOf('.')).toLowerCase();
-    
+    const validExtensions = [".xlsx", ".xls"];
+    const fileExtension = uploadedFile.name
+      .substring(uploadedFile.name.lastIndexOf("."))
+      .toLowerCase();
+
     if (!validExtensions.includes(fileExtension)) {
-      setError('Please upload a valid Excel file (.xlsx or .xls)');
+      setError("Please upload a valid Excel file (.xlsx or .xls)");
       return;
     }
-    
-    setError('');
+
+    setError("");
     setFile(uploadedFile);
     setProcessing(true);
     setValidated(false);
-    
+
     try {
       const parsedRecipes = await parseExcelFile(uploadedFile);
       setRecipes(parsedRecipes);
@@ -219,29 +231,33 @@ const AllergenLabelSystem = () => {
    */
   const processAllergens = async () => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      setError('WebSocket not connected. Please wait for connection or refresh the page.');
+      setError(
+        "WebSocket not connected. Please wait for connection or refresh the page."
+      );
       return;
     }
-    
+
     if (recipes.length === 0) {
-      setError('No recipes to process');
+      setError("No recipes to process");
       return;
     }
-    
+
     setProcessing(true);
     setValidated(true);
-    setError('');
-    
+    setError("");
+
     try {
-      wsRef.current.send(JSON.stringify({
-        type: 'PROCESS_RECIPES',
-        recipes: recipes.map(r => ({
-          recipe_name: r.recipe_name,
-          ingredients: r.ingredients
-        }))
-      }));
+      wsRef.current.send(
+        JSON.stringify({
+          type: "PROCESS_RECIPES",
+          recipes: recipes.map((r) => ({
+            recipe_name: r.recipe_name,
+            ingredients: r.ingredients,
+          })),
+        })
+      );
     } catch (err) {
-      setError('Failed to send data to server: ' + err.message);
+      setError("Failed to send data to server: " + err.message);
       setProcessing(false);
     }
   };
@@ -268,8 +284,8 @@ const AllergenLabelSystem = () => {
     setRecipes([]);
     setCurrentRecipeIndex(0);
     setProcessing(false);
-    setProgress({ current: 0, total: 0, message: '' });
-    setError('');
+    setProgress({ current: 0, total: 0, message: "" });
+    setError("");
     setValidated(false);
   };
 
@@ -285,11 +301,15 @@ const AllergenLabelSystem = () => {
             <p className="subtitle">
               Upload recipes and identify allergens automatically
             </p>
-            
+
             {/* WebSocket Status */}
-            <div className={`ws-status ${wsConnected ? 'connected' : 'disconnected'}`}>
+            <div
+              className={`ws-status ${
+                wsConnected ? "connected" : "disconnected"
+              }`}
+            >
               <div className="status-dot"></div>
-              <span>{wsConnected ? 'Connected' : 'Disconnected'}</span>
+              <span>{wsConnected ? "Connected" : "Disconnected"}</span>
             </div>
           </div>
 
@@ -300,9 +320,12 @@ const AllergenLabelSystem = () => {
                 <div className="upload-content">
                   <Upload className="upload-icon" />
                   <p className="upload-text">
-                    <span className="upload-text-bold">Click to upload</span> or drag and drop
+                    <span className="upload-text-bold">Click to upload</span> or
+                    drag and drop
                   </p>
-                  <p className="upload-subtext">Excel files only (.xlsx, .xls)</p>
+                  <p className="upload-subtext">
+                    Excel files only (.xlsx, .xls)
+                  </p>
                 </div>
                 <input
                   type="file"
@@ -312,12 +335,16 @@ const AllergenLabelSystem = () => {
                   disabled={processing}
                 />
               </label>
-              
+
               {file && (
                 <div className="file-info">
                   <FileSpreadsheet className="file-icon" />
                   <span>{file.name}</span>
-                  <button onClick={resetApp} className="reset-btn" title="Remove file">
+                  <button
+                    onClick={resetApp}
+                    className="reset-btn"
+                    title="Remove file"
+                  >
                     <XCircle size={16} />
                   </button>
                 </div>
@@ -345,7 +372,9 @@ const AllergenLabelSystem = () => {
               <div className="progress-bar-container">
                 <div
                   className="progress-bar"
-                  style={{ width: `${(progress.current / progress.total) * 100}%` }}
+                  style={{
+                    width: `${(progress.current / progress.total) * 100}%`,
+                  }}
                 />
               </div>
             </div>
@@ -369,15 +398,17 @@ const AllergenLabelSystem = () => {
                       <tr key={idx}>
                         <td className="recipe-name">{recipe.recipe_name}</td>
                         <td className="ingredients-cell">
-                          {recipe.ingredients.join(', ')}
+                          {recipe.ingredients.join(", ")}
                         </td>
-                        <td className="count-cell">{recipe.ingredients.length}</td>
+                        <td className="count-cell">
+                          {recipe.ingredients.length}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-              
+
               <button
                 onClick={processAllergens}
                 disabled={processing || !wsConnected}
@@ -395,7 +426,7 @@ const AllergenLabelSystem = () => {
                   </>
                 )}
               </button>
-              
+
               {!wsConnected && (
                 <p className="warning-text">
                   ⚠️ Waiting for WebSocket connection...
@@ -448,54 +479,60 @@ const AllergenLabelSystem = () => {
                 </div>
 
                 {/* Allergens */}
-                {currentRecipe.allergens && currentRecipe.allergens.length > 0 && (
-                  <div className="detail-section">
-                    <h4 className="detail-title">Allergens:</h4>
-                    <div className="allergen-tags">
-                      {currentRecipe.allergens.map((allergen, idx) => (
-                        <span key={idx} className="allergen-tag">
-                          {allergen.charAt(0).toUpperCase() + allergen.slice(1)}
-                        </span>
-                      ))}
+                {currentRecipe.allergens &&
+                  currentRecipe.allergens.length > 0 && (
+                    <div className="detail-section">
+                      <h4 className="detail-title">Allergens:</h4>
+                      <div className="allergen-tags">
+                        {currentRecipe.allergens.map((allergen, idx) => (
+                          <span key={idx} className="allergen-tag">
+                            {allergen.charAt(0).toUpperCase() +
+                              allergen.slice(1)}
+                          </span>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
                 {/* Unrecognized Ingredients */}
-                {currentRecipe.unrecognized_ingredients && 
-                 currentRecipe.unrecognized_ingredients.length > 0 && (
-                  <div className="detail-section">
-                    <h4 className="detail-title">Unrecognized Ingredients:</h4>
-                    <ul className="unrecognized-list">
-                      {currentRecipe.unrecognized_ingredients.map((ing, idx) => (
-                        <li key={idx}>{ing}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                {currentRecipe.unrecognized_ingredients &&
+                  currentRecipe.unrecognized_ingredients.length > 0 && (
+                    <div className="detail-section">
+                      <h4 className="detail-title">
+                        Unrecognized Ingredients:
+                      </h4>
+                      <ul className="unrecognized-list">
+                        {currentRecipe.unrecognized_ingredients.map(
+                          (ing, idx) => (
+                            <li key={idx}>{ing}</li>
+                          )
+                        )}
+                      </ul>
+                    </div>
+                  )}
 
                 {/* Warnings */}
-                {currentRecipe.flagged_ingredients && 
-                 Object.keys(currentRecipe.flagged_ingredients).length > 0 && (
-                  <div className="detail-section">
-                    <h4 className="detail-title">Warnings:</h4>
-                    <div className="warnings-container">
-                      {Object.entries(currentRecipe.flagged_ingredients).map(
-                        ([ing, allergens], idx) => (
-                          <div key={idx} className="warning-box">
-                            <AlertCircle className="warning-icon" />
-                            <p>
-                              <strong>{ing}</strong> contains{' '}
-                              <strong>{allergens.join(', ')}</strong>, which{' '}
-                              {allergens.length === 1 ? 'is a' : 'are'} common 
-                              allergen{allergens.length > 1 ? 's' : ''}.
-                            </p>
-                          </div>
-                        )
-                      )}
+                {currentRecipe.flagged_ingredients &&
+                  Object.keys(currentRecipe.flagged_ingredients).length > 0 && (
+                    <div className="detail-section">
+                      <h4 className="detail-title">Warnings:</h4>
+                      <div className="warnings-container">
+                        {Object.entries(currentRecipe.flagged_ingredients).map(
+                          ([ing, allergens], idx) => (
+                            <div key={idx} className="warning-box">
+                              <AlertCircle className="warning-icon" />
+                              <p>
+                                <strong>{ing}</strong> contains{" "}
+                                <strong>{allergens.join(", ")}</strong>, which{" "}
+                                {allergens.length === 1 ? "is a" : "are"} common
+                                allergen{allergens.length > 1 ? "s" : ""}.
+                              </p>
+                            </div>
+                          )
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
                 {/* Status Message */}
                 <div className="status-message">
